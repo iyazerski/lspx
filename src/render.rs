@@ -13,44 +13,38 @@ pub(crate) fn render_location_output(
 ) -> Result<String> {
     let total_items = payload.locations.len();
     let locations = apply_limit(payload.locations.as_slice(), limit);
-    let mut lines = vec![format!(
-        "summary: {}",
-        location_summary(locations.len(), total_items, payload)
-    )];
-    lines.extend(build_position_header(
-        &payload.workspace_root,
-        &payload.position,
-    ));
-
-    if let Some(target) = payload.target {
-        lines.push(format!("target: {}", goto_target_name(target)));
-    }
-
-    lines.push(format!(
-        "items: {}",
-        format_count(locations.len(), total_items, "items")
-    ));
 
     if locations.is_empty() {
-        lines.push(format!("result: {}", no_location_result(payload)));
-        return Ok(lines.join("\n"));
+        return Ok(join_sections(vec![
+            no_location_result(payload),
+            position_context_section(&payload.workspace_root, &payload.position),
+        ]));
     }
 
-    lines.push("results:".to_string());
+    let answer = location_summary(locations.len(), total_items, payload);
+    let mut results = Vec::new();
 
     for (index, location) in locations.iter().enumerate() {
-        lines.push(format!(
+        results.push(format!(
             "{}. {}",
             index + 1,
             format_location(&payload.workspace_root, location)
         ));
 
         if let Some(snippet) = location.snippet.as_deref() {
-            lines.push(format!("   context: {snippet}"));
+            results.push(format_snippet_line(
+                "   ",
+                location.range.start.line,
+                snippet,
+            ));
         }
     }
 
-    Ok(lines.join("\n"))
+    Ok(join_sections(vec![
+        answer,
+        position_context_section(&payload.workspace_root, &payload.position),
+        section("Results", results),
+    ]))
 }
 
 pub(crate) fn render_workspace_symbol_output(
@@ -70,40 +64,24 @@ pub(crate) fn render_workspace_symbol_output(
         symbols.truncate(n);
     }
 
-    let mut lines = vec![format!(
-        "summary: {}",
-        workspace_symbol_summary(symbols.len(), total_items, &payload.query)
-    )];
-    lines.push(format!("query: {}", payload.query));
-
-    if let Some(kind_filter) = kind_filter {
-        lines.push(format!("kind: {}", workspace_kind_name(kind_filter)));
-    }
-
-    lines.push(format!(
-        "items: {}",
-        format_count(symbols.len(), total_items, "symbols")
-    ));
-
     if symbols.is_empty() {
-        lines.push(format!(
-            "result: no symbols found for query {:?}",
-            payload.query
-        ));
-        return Ok(lines.join("\n"));
+        return Ok(join_sections(vec![
+            workspace_symbol_summary(symbols.len(), total_items, &payload.query),
+            query_context_section(payload.query.as_str(), kind_filter),
+        ]));
     }
 
-    lines.push("results:".to_string());
+    let mut results = Vec::new();
 
     for (index, symbol) in symbols.iter().enumerate() {
-        lines.push(format!(
+        results.push(format!(
             "{}. {} [{}]",
             index + 1,
             symbol.name,
             symbol_kind_name(symbol.kind)
         ));
-        lines.push(format!(
-            "   location: {}",
+        results.push(format!(
+            "   {}",
             format_workspace_position(
                 &payload.workspace_root,
                 &symbol.file,
@@ -113,61 +91,60 @@ pub(crate) fn render_workspace_symbol_output(
         ));
 
         if let Some(container) = symbol.container_name.as_deref() {
-            lines.push(format!("   container: {container}"));
+            results.push(format!("   in {container}"));
         }
 
         if let Some(snippet) = symbol.snippet.as_deref() {
-            lines.push(format!("   context: {snippet}"));
+            results.push(format_snippet_line("   ", symbol.range.start.line, snippet));
         }
     }
 
-    Ok(lines.join("\n"))
+    Ok(join_sections(vec![
+        workspace_symbol_summary(symbols.len(), total_items, &payload.query),
+        query_context_section(payload.query.as_str(), kind_filter),
+        section("Results", results),
+    ]))
 }
 
 pub(crate) fn render_symbol_at_output(payload: &SymbolAtOutput) -> Result<String> {
-    let mut lines = vec![format!(
-        "summary: {}",
-        symbol_at_summary(&payload.workspace_root, payload)
-    )];
-    lines.extend(build_position_header(
-        &payload.workspace_root,
-        &payload.position,
-    ));
-
     match payload.symbol.as_ref() {
         Some(symbol) => {
-            lines.push(format!("result: found symbol {:?}", symbol.name));
-            lines.push(format!("symbol: {}", symbol.name));
+            let mut details = Vec::new();
 
             if let Some(kind) = symbol.kind {
-                lines.push(format!("kind: {}", symbol_kind_name(kind)));
+                details.push(format!("Kind: {}", symbol_kind_name(kind)));
             }
 
-            lines.push(format!(
-                "range: columns {}-{}",
+            details.push(format!(
+                "Range: columns {}-{}",
                 symbol.start_column, symbol.end_column
             ));
 
             if let Some(detail) = symbol.detail.as_deref() {
-                lines.push(format!("detail: {detail}"));
+                details.push(format!("Detail: {detail}"));
             }
 
-            if let Some(hover) = payload.hover.as_deref()
-                && !hover.trim().is_empty()
+            let mut sections = vec![
+                symbol_at_summary(&payload.workspace_root, payload),
+                position_context_section(&payload.workspace_root, &payload.position),
+                section("Details", details),
+            ];
+
+            if let Some(hover) = payload
+                .hover
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
             {
-                lines.push("hover:".to_string());
-                lines.extend(indent_block(hover, "  "));
+                sections.push(section("Hover", indent_block(hover, "  ")));
             }
-        }
-        None => {
-            lines.push(format!(
-                "result: no symbol found at {}",
-                format_requested_position(&payload.workspace_root, &payload.position)
-            ));
-        }
-    }
 
-    Ok(lines.join("\n"))
+            Ok(join_sections(sections))
+        }
+        None => Ok(join_sections(vec![
+            symbol_at_summary(&payload.workspace_root, payload),
+            position_context_section(&payload.workspace_root, &payload.position),
+        ])),
+    }
 }
 
 pub(crate) fn render_outline_output(
@@ -176,47 +153,34 @@ pub(crate) fn render_outline_output(
 ) -> Result<String> {
     let total_items = payload.symbols.len();
     let symbols = apply_limit(payload.symbols.as_slice(), limit);
-    let mut lines = vec![
-        format!(
-            "summary: {}",
+
+    if symbols.is_empty() {
+        return Ok(join_sections(vec![
             outline_summary(
                 symbols.len(),
                 total_items,
                 &payload.workspace_root,
-                &payload.file
-            )
-        ),
-        format!(
-            "file: {}",
-            display_path(&payload.workspace_root, &payload.file)
-        ),
-        format!(
-            "depth: {}",
-            payload
-                .depth
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "full".to_string())
-        ),
-        format!(
-            "items: {}",
-            format_count(symbols.len(), total_items, "top-level symbols")
-        ),
-    ];
-
-    if symbols.is_empty() {
-        lines.push(format!(
-            "result: no symbols found in {}",
-            display_path(&payload.workspace_root, &payload.file)
-        ));
-        return Ok(lines.join("\n"));
+                &payload.file,
+            ),
+            outline_context_section(payload),
+        ]));
     }
 
-    lines.push("tree:".to_string());
+    let mut tree = Vec::new();
     for symbol in symbols {
-        lines.extend(format_outline_tree(symbol, 0));
+        tree.extend(format_outline_tree(symbol, 0));
     }
 
-    Ok(lines.join("\n"))
+    Ok(join_sections(vec![
+        outline_summary(
+            symbols.len(),
+            total_items,
+            &payload.workspace_root,
+            &payload.file,
+        ),
+        outline_context_section(payload),
+        section("Outline", tree),
+    ]))
 }
 
 fn apply_limit<T>(items: &[T], limit: Option<usize>) -> &[T] {
@@ -226,18 +190,20 @@ fn apply_limit<T>(items: &[T], limit: Option<usize>) -> &[T] {
     }
 }
 
-fn build_position_header(workspace_root: &Path, position: &ResolvedPosition) -> Vec<String> {
+fn position_context_section(workspace_root: &Path, position: &ResolvedPosition) -> String {
     let mut lines = Vec::new();
+    lines.push(format!(
+        "Requested position: {}",
+        format_requested_position(workspace_root, position)
+    ));
 
-    if position.resolved_column.is_some() {
+    if position.resolved_column.is_some()
+        && position.resolved_column != Some(position.requested_column)
+    {
         lines.push(format!(
-            "resolved: {}",
+            "Resolved position: {}",
             format_resolved_position(workspace_root, position)
         ));
-    }
-
-    if let Some(symbol) = position.symbol.as_ref() {
-        lines.push(format!("subject: {}", symbol.name));
     }
 
     if let Some(source_line) = position
@@ -245,18 +211,40 @@ fn build_position_header(workspace_root: &Path, position: &ResolvedPosition) -> 
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        lines.push(format!("source: {source_line}"));
+        lines.push("Source".to_string());
+        lines.push(format_snippet_line("  ", position.line, source_line));
     }
 
-    lines
+    lines.join("\n")
 }
 
-fn format_count(shown: usize, total: usize, label: &str) -> String {
-    if shown == total {
-        total.to_string()
-    } else {
-        format!("{shown} shown of {total} {label}")
+fn query_context_section(query: &str, kind_filter: Option<SymbolKindFilter>) -> String {
+    let mut lines = vec![sentence(format!("Query {:?}", query))];
+
+    if let Some(kind_filter) = kind_filter {
+        lines.push(format!(
+            "Filtered to {} symbols.",
+            workspace_kind_name(kind_filter)
+        ));
     }
+
+    lines.join("\n")
+}
+
+fn outline_context_section(payload: &OutlineOutput) -> String {
+    let depth = payload
+        .depth
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "full".to_string());
+
+    [
+        sentence(format!(
+            "File {:?}",
+            display_path(&payload.workspace_root, &payload.file)
+        )),
+        sentence(format!("Depth {depth}")),
+    ]
+    .join("\n")
 }
 
 fn format_summary_count(shown: usize, total: usize, singular: &str, plural: &str) -> String {
@@ -280,41 +268,47 @@ fn location_summary(shown: usize, total: usize, payload: &LocationOutput) -> Str
         Some(symbol) => match payload.target {
             Some(target) => {
                 let (singular, plural) = goto_target_labels(target);
-                format!(
+                sentence(format!(
                     "{} for {}",
                     format_summary_count(shown, total, singular, plural),
                     symbol.name
-                )
+                ))
             }
-            None => format!(
+            None => sentence(format!(
                 "{} of {}",
                 format_summary_count(shown, total, "usage", "usages"),
                 symbol.name
-            ),
+            )),
         },
-        None => format_summary_count(shown, total, "location", "locations"),
+        None => sentence(format_summary_count(shown, total, "location", "locations")),
     }
 }
 
 fn workspace_symbol_summary(shown: usize, total: usize, query: &str) -> String {
     if shown == 0 {
-        return format!("no symbols found for query {:?}", query);
+        return sentence(format!("no symbols found for query {:?}", query));
     }
 
-    format!(
+    sentence(format!(
         "{} for query {:?}",
         format_summary_count(shown, total, "symbol", "symbols"),
         query
-    )
+    ))
 }
 
 fn symbol_at_summary(workspace_root: &Path, payload: &SymbolAtOutput) -> String {
     match payload.symbol.as_ref() {
-        Some(symbol) => format!("found symbol {:?}", symbol.name),
-        None => format!(
+        Some(symbol) => {
+            let resolved = format_resolved_position(workspace_root, &payload.position);
+            match symbol.kind.map(symbol_kind_name) {
+                Some(kind) => sentence(format!("{} is a {} at {}", symbol.name, kind, resolved)),
+                None => sentence(format!("{} is at {}", symbol.name, resolved)),
+            }
+        }
+        None => sentence(format!(
             "no symbol found at {}",
             format_requested_position(workspace_root, &payload.position)
-        ),
+        )),
     }
 }
 
@@ -322,14 +316,14 @@ fn outline_summary(shown: usize, total: usize, workspace_root: &Path, file: &Pat
     let display_file = display_path(workspace_root, file);
 
     if shown == 0 {
-        return format!("no symbols found in {display_file}");
+        return sentence(format!("no symbols found in {display_file}"));
     }
 
-    format!(
+    sentence(format!(
         "{} in {}",
         format_summary_count(shown, total, "top-level symbol", "top-level symbols"),
         display_file
-    )
+    ))
 }
 
 fn no_location_result(payload: &LocationOutput) -> String {
@@ -337,18 +331,18 @@ fn no_location_result(payload: &LocationOutput) -> String {
 
     match payload.position.symbol.as_ref() {
         Some(symbol) => match payload.target {
-            Some(target) => format!(
+            Some(target) => sentence(format!(
                 "no {} found for symbol {:?} at {}",
                 goto_target_name(target),
                 symbol.name,
                 requested
-            ),
-            None => format!(
+            )),
+            None => sentence(format!(
                 "no usages found for symbol {:?} at {}",
                 symbol.name, requested
-            ),
+            )),
         },
-        None => format!("no symbol found at {}", requested),
+        None => sentence(format!("no symbol found at {}", requested)),
     }
 }
 
@@ -436,6 +430,32 @@ fn format_outline_tree(symbol: &DocumentSymbolNode, indent: usize) -> Vec<String
 
 fn indent_block(text: &str, prefix: &str) -> Vec<String> {
     text.lines().map(|line| format!("{prefix}{line}")).collect()
+}
+
+fn format_snippet_line(prefix: &str, line: usize, snippet: &str) -> String {
+    format!("{prefix}{line} | {snippet}")
+}
+
+fn section(title: &str, lines: Vec<String>) -> String {
+    let mut block = vec![title.to_string()];
+    block.extend(lines);
+    block.join("\n")
+}
+
+fn join_sections(sections: Vec<String>) -> String {
+    sections
+        .into_iter()
+        .filter(|section| !section.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn sentence(text: String) -> String {
+    if text.ends_with('.') {
+        text
+    } else {
+        format!("{text}.")
+    }
 }
 
 fn select_workspace_symbols<'a>(
