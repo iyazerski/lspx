@@ -13,11 +13,14 @@ pub(crate) fn render_location_output(
 ) -> Result<String> {
     let total_items = payload.locations.len();
     let locations = apply_limit(payload.locations.as_slice(), limit);
-    let mut lines = build_position_header(
-        payload.command.as_str(),
+    let mut lines = vec![format!(
+        "summary: {}",
+        location_summary(locations.len(), total_items, payload)
+    )];
+    lines.extend(build_position_header(
         &payload.workspace_root,
         &payload.position,
-    );
+    ));
 
     if let Some(target) = payload.target {
         lines.push(format!("target: {}", goto_target_name(target)));
@@ -67,11 +70,11 @@ pub(crate) fn render_workspace_symbol_output(
         symbols.truncate(n);
     }
 
-    let mut lines = vec![
-        format!("command: {}", payload.command),
-        format!("workspace: {}", payload.workspace_root.display()),
-        format!("query: {}", payload.query),
-    ];
+    let mut lines = vec![format!(
+        "summary: {}",
+        workspace_symbol_summary(symbols.len(), total_items, &payload.query)
+    )];
+    lines.push(format!("query: {}", payload.query));
 
     if let Some(kind_filter) = kind_filter {
         lines.push(format!("kind: {}", workspace_kind_name(kind_filter)));
@@ -122,11 +125,14 @@ pub(crate) fn render_workspace_symbol_output(
 }
 
 pub(crate) fn render_symbol_at_output(payload: &SymbolAtOutput) -> Result<String> {
-    let mut lines = build_position_header(
-        payload.command.as_str(),
+    let mut lines = vec![format!(
+        "summary: {}",
+        symbol_at_summary(&payload.workspace_root, payload)
+    )];
+    lines.extend(build_position_header(
         &payload.workspace_root,
         &payload.position,
-    );
+    ));
 
     match payload.symbol.as_ref() {
         Some(symbol) => {
@@ -171,8 +177,15 @@ pub(crate) fn render_outline_output(
     let total_items = payload.symbols.len();
     let symbols = apply_limit(payload.symbols.as_slice(), limit);
     let mut lines = vec![
-        format!("command: {}", payload.command),
-        format!("workspace: {}", payload.workspace_root.display()),
+        format!(
+            "summary: {}",
+            outline_summary(
+                symbols.len(),
+                total_items,
+                &payload.workspace_root,
+                &payload.file
+            )
+        ),
         format!(
             "file: {}",
             display_path(&payload.workspace_root, &payload.file)
@@ -213,19 +226,8 @@ fn apply_limit<T>(items: &[T], limit: Option<usize>) -> &[T] {
     }
 }
 
-fn build_position_header(
-    command: &str,
-    workspace_root: &Path,
-    position: &ResolvedPosition,
-) -> Vec<String> {
-    let mut lines = vec![
-        format!("command: {command}"),
-        format!("workspace: {}", workspace_root.display()),
-        format!(
-            "request: {}",
-            format_requested_position(workspace_root, position)
-        ),
-    ];
+fn build_position_header(workspace_root: &Path, position: &ResolvedPosition) -> Vec<String> {
+    let mut lines = Vec::new();
 
     if position.resolved_column.is_some() {
         lines.push(format!(
@@ -257,6 +259,79 @@ fn format_count(shown: usize, total: usize, label: &str) -> String {
     }
 }
 
+fn format_summary_count(shown: usize, total: usize, singular: &str, plural: &str) -> String {
+    if shown == total {
+        if total == 1 {
+            format!("1 {singular}")
+        } else {
+            format!("{total} {plural}")
+        }
+    } else {
+        format!("{shown} shown of {total} {plural}")
+    }
+}
+
+fn location_summary(shown: usize, total: usize, payload: &LocationOutput) -> String {
+    if shown == 0 {
+        return no_location_result(payload);
+    }
+
+    match payload.position.symbol.as_ref() {
+        Some(symbol) => match payload.target {
+            Some(target) => {
+                let (singular, plural) = goto_target_labels(target);
+                format!(
+                    "{} for {}",
+                    format_summary_count(shown, total, singular, plural),
+                    symbol.name
+                )
+            }
+            None => format!(
+                "{} of {}",
+                format_summary_count(shown, total, "usage", "usages"),
+                symbol.name
+            ),
+        },
+        None => format_summary_count(shown, total, "location", "locations"),
+    }
+}
+
+fn workspace_symbol_summary(shown: usize, total: usize, query: &str) -> String {
+    if shown == 0 {
+        return format!("no symbols found for query {:?}", query);
+    }
+
+    format!(
+        "{} for query {:?}",
+        format_summary_count(shown, total, "symbol", "symbols"),
+        query
+    )
+}
+
+fn symbol_at_summary(workspace_root: &Path, payload: &SymbolAtOutput) -> String {
+    match payload.symbol.as_ref() {
+        Some(symbol) => format!("found symbol {:?}", symbol.name),
+        None => format!(
+            "no symbol found at {}",
+            format_requested_position(workspace_root, &payload.position)
+        ),
+    }
+}
+
+fn outline_summary(shown: usize, total: usize, workspace_root: &Path, file: &Path) -> String {
+    let display_file = display_path(workspace_root, file);
+
+    if shown == 0 {
+        return format!("no symbols found in {display_file}");
+    }
+
+    format!(
+        "{} in {}",
+        format_summary_count(shown, total, "top-level symbol", "top-level symbols"),
+        display_file
+    )
+}
+
 fn no_location_result(payload: &LocationOutput) -> String {
     let requested = format_requested_position(&payload.workspace_root, &payload.position);
 
@@ -282,6 +357,14 @@ fn goto_target_name(target: GotoTarget) -> &'static str {
         GotoTarget::Definition => "definition",
         GotoTarget::Declaration => "declaration",
         GotoTarget::Type => "type definition",
+    }
+}
+
+fn goto_target_labels(target: GotoTarget) -> (&'static str, &'static str) {
+    match target {
+        GotoTarget::Definition => ("definition", "definitions"),
+        GotoTarget::Declaration => ("declaration", "declarations"),
+        GotoTarget::Type => ("type definition", "type definitions"),
     }
 }
 

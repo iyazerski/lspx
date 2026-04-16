@@ -7,7 +7,6 @@ use crate::cli::GotoTarget;
 #[derive(Debug, Serialize)]
 pub(crate) struct LocationOutput {
     pub(crate) ok: bool,
-    pub(crate) command: String,
     pub(crate) workspace_root: PathBuf,
     pub(crate) position: ResolvedPosition,
     pub(crate) target: Option<GotoTarget>,
@@ -17,7 +16,6 @@ pub(crate) struct LocationOutput {
 #[derive(Debug, Serialize)]
 pub(crate) struct WorkspaceSymbolOutput {
     pub(crate) ok: bool,
-    pub(crate) command: String,
     pub(crate) workspace_root: PathBuf,
     pub(crate) query: String,
     pub(crate) symbols: Vec<WorkspaceSymbolRecord>,
@@ -26,7 +24,6 @@ pub(crate) struct WorkspaceSymbolOutput {
 #[derive(Debug, Serialize)]
 pub(crate) struct OutlineOutput {
     pub(crate) ok: bool,
-    pub(crate) command: String,
     pub(crate) workspace_root: PathBuf,
     pub(crate) file: PathBuf,
     pub(crate) depth: Option<usize>,
@@ -36,7 +33,6 @@ pub(crate) struct OutlineOutput {
 #[derive(Debug, Serialize)]
 pub(crate) struct SymbolAtOutput {
     pub(crate) ok: bool,
-    pub(crate) command: String,
     pub(crate) workspace_root: PathBuf,
     pub(crate) position: ResolvedPosition,
     pub(crate) symbol: Option<SymbolAtRecord>,

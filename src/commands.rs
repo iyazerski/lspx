@@ -26,8 +26,10 @@ fn run_doctor(workspace_override: Option<PathBuf>) -> Result<String> {
     let cwd = env::current_dir().context("failed to determine current directory")?;
     let workspace_root = resolve_workspace_root(workspace_override.as_deref(), None, &cwd)?;
     let adapter = daemon::adapter_status_with_daemon(&workspace_root)?;
+    let ty_found = adapter["ty"]["found"].as_bool().unwrap_or(false);
+    let daemon_running = adapter["daemon"]["running"].as_bool().unwrap_or(false);
 
-    let ty_line = if adapter["ty"]["found"].as_bool().unwrap_or(false) {
+    let ty_line = if ty_found {
         format!(
             "ty: found at {}",
             adapter["ty"]["path"].as_str().unwrap_or("<unknown>")
@@ -35,7 +37,7 @@ fn run_doctor(workspace_override: Option<PathBuf>) -> Result<String> {
     } else {
         "ty: not found".to_string()
     };
-    let daemon_line = if adapter["daemon"]["running"].as_bool().unwrap_or(false) {
+    let daemon_line = if daemon_running {
         format!(
             "daemon: running (pid {})",
             adapter["daemon"]["pid"]
@@ -48,12 +50,21 @@ fn run_doctor(workspace_override: Option<PathBuf>) -> Result<String> {
     };
 
     Ok(format!(
-        "command: doctor\nversion: {}\nworkspace: {}\n{}\n{}",
+        "summary: {}\nversion: {}\n{}\n{}",
+        doctor_summary(ty_found, daemon_running),
         env!("CARGO_PKG_VERSION"),
-        workspace_root.display(),
         ty_line,
         daemon_line
     ))
+}
+
+fn doctor_summary(ty_found: bool, daemon_running: bool) -> &'static str {
+    match (ty_found, daemon_running) {
+        (true, true) => "ty available, daemon running",
+        (true, false) => "ty available, daemon not running",
+        (false, true) => "ty unavailable, daemon running",
+        (false, false) => "ty unavailable, daemon not running",
+    }
 }
 
 fn run_goto(

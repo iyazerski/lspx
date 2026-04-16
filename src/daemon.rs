@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -125,25 +126,21 @@ pub fn run_daemon_command(workspace_override: Option<PathBuf>, args: DaemonArgs)
     match args.command {
         DaemonSubcommand::Ensure(lifecycle) => {
             let status = ensure_daemon(&workspace_root, lifecycle.idle_seconds)?;
-            render_status("daemon ensure", status)
+            render_status(status)
         }
         DaemonSubcommand::Serve(lifecycle) => {
             serve_daemon(&workspace_root, lifecycle.idle_seconds)?;
-            Ok(format!(
-                "command: daemon serve\nworkspace: {}\nresult: daemon exited",
-                workspace_root.display()
-            ))
+            Ok("summary: daemon exited".to_string())
         }
         DaemonSubcommand::Status => {
             let status = daemon_status(&workspace_root)?;
-            render_status("daemon status", status)
+            render_status(status)
         }
         DaemonSubcommand::Stop => {
             let stopped = stop_daemon(&workspace_root)?;
             Ok(format!(
-                "command: daemon stop\nworkspace: {}\nstopped: {}",
-                workspace_root.display(),
-                stopped
+                "summary: {}\nstopped: {stopped}",
+                stop_summary(stopped)
             ))
         }
     }
@@ -190,19 +187,7 @@ pub fn ensure_daemon(workspace_root: &Path, idle_seconds: u64) -> Result<DaemonS
         let _ = fs::remove_file(&socket);
     }
 
-    let current_exe = env::current_exe().context("failed to resolve current lspyx binary")?;
-    Command::new(current_exe)
-        .arg("--workspace")
-        .arg(workspace_root)
-        .arg("daemon")
-        .arg("serve")
-        .arg("--idle-seconds")
-        .arg(idle_seconds.to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("failed to spawn daemon for {}", workspace_root.display()))?;
+    spawn_daemon_process(workspace_root, idle_seconds)?;
 
     let deadline = Instant::now() + Duration::from_secs(DAEMON_STARTUP_TIMEOUT_SECONDS);
     while Instant::now() < deadline {
@@ -217,6 +202,49 @@ pub fn ensure_daemon(workspace_root: &Path, idle_seconds: u64) -> Result<DaemonS
         "daemon did not become ready for workspace {}",
         workspace_root.display()
     )
+}
+
+fn spawn_daemon_process(workspace_root: &Path, idle_seconds: u64) -> Result<()> {
+    let current_exe = env::current_exe().context("failed to resolve current lspyx binary")?;
+
+    // Double-fork the daemon so it is re-parented before `daemon ensure` exits.
+    let child_pid = unsafe { libc::fork() };
+    if child_pid < 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to fork daemon launcher");
+    }
+
+    if child_pid == 0 {
+        if unsafe { libc::setsid() } == -1 {
+            unsafe { libc::_exit(1) };
+        }
+
+        let grandchild_pid = unsafe { libc::fork() };
+        if grandchild_pid < 0 {
+            unsafe { libc::_exit(1) };
+        }
+
+        if grandchild_pid > 0 {
+            unsafe { libc::_exit(0) };
+        }
+
+        let mut command = Command::new(current_exe);
+        let error = command
+            .arg("--workspace")
+            .arg(workspace_root)
+            .arg("daemon")
+            .arg("serve")
+            .arg("--idle-seconds")
+            .arg(idle_seconds.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .exec();
+        let _ = error;
+        unsafe { libc::_exit(1) };
+    }
+
+    let _ = unsafe { libc::waitpid(child_pid, std::ptr::null_mut(), 0) };
+    Ok(())
 }
 
 pub fn stop_daemon(workspace_root: &Path) -> Result<bool> {
@@ -240,19 +268,35 @@ pub fn adapter_status_with_daemon(workspace_root: &Path) -> Result<Value> {
     }))
 }
 
-fn render_status(command: &str, status: DaemonStatus) -> Result<String> {
+fn render_status(status: DaemonStatus) -> Result<String> {
     let pid = status
         .pid
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".to_string());
 
     Ok(format!(
-        "command: {command}\nworkspace: {}\nrunning: {}\npid: {}\nsocket: {}",
-        status.workspace_root.display(),
+        "summary: {}\nrunning: {}\npid: {}\nsocket: {}",
+        daemon_status_summary(status.running),
         status.running,
         pid,
         status.socket_path.display()
     ))
+}
+
+fn daemon_status_summary(running: bool) -> &'static str {
+    if running {
+        "daemon running"
+    } else {
+        "daemon not running"
+    }
+}
+
+fn stop_summary(stopped: bool) -> &'static str {
+    if stopped {
+        "daemon stopped"
+    } else {
+        "daemon was not running"
+    }
 }
 
 fn serve_daemon(workspace_root: &Path, idle_seconds: u64) -> Result<()> {
@@ -392,7 +436,6 @@ fn dispatch_request(
             build_location_response(
                 LocationOutput {
                     ok: true,
-                    command: "goto".to_string(),
                     workspace_root: workspace_root.to_path_buf(),
                     position,
                     target: Some(target),
@@ -420,7 +463,6 @@ fn dispatch_request(
             build_location_response(
                 LocationOutput {
                     ok: true,
-                    command: "usages".to_string(),
                     workspace_root: workspace_root.to_path_buf(),
                     position,
                     target: None,
@@ -443,7 +485,6 @@ fn dispatch_request(
                 .collect();
             let payload = WorkspaceSymbolOutput {
                 ok: true,
-                command: "find-symbol".to_string(),
                 workspace_root: workspace_root.to_path_buf(),
                 query,
                 symbols,
@@ -455,7 +496,6 @@ fn dispatch_request(
             let hover = Some(adapter.hover(&file, line, position.requested_column)?);
             let payload = SymbolAtOutput {
                 ok: true,
-                command: "inspect".to_string(),
                 workspace_root: workspace_root.to_path_buf(),
                 symbol: position.symbol.clone(),
                 position,
@@ -474,7 +514,6 @@ fn dispatch_request(
             };
             let payload = OutlineOutput {
                 ok: true,
-                command: "outline".to_string(),
                 workspace_root: workspace_root.to_path_buf(),
                 file,
                 depth,
