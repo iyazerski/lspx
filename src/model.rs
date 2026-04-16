@@ -95,7 +95,10 @@ impl DocumentSymbolNode {
         let prefix = "  ".repeat(indent);
         let mut lines = vec![format!(
             "{prefix}{} [{}] {}:{}",
-            self.name, self.kind, self.range.start.line, self.range.start.column
+            self.name,
+            symbol_kind_name(self.kind),
+            self.range.start.line,
+            self.range.start.column
         )];
 
         for child in &self.children {
@@ -113,6 +116,7 @@ pub(crate) struct WorkspaceSymbolRecord {
     pub(crate) container_name: Option<String>,
     pub(crate) file: PathBuf,
     pub(crate) range: RangeRecord,
+    pub(crate) snippet: Option<String>,
 }
 
 pub(crate) fn display_path(workspace_root: &Path, path: &Path) -> String {
@@ -126,4 +130,37 @@ pub(crate) fn display_path(workspace_root: &Path, path: &Path) -> String {
             }
         })
         .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Map an LSP SymbolKind integer to a human-readable label.
+pub(crate) fn symbol_kind_name(kind: u64) -> &'static str {
+    match kind {
+        1 => "file",
+        2 => "module",
+        3 => "namespace",
+        4 => "package",
+        5 => "class",
+        6 => "method",
+        7 => "property",
+        8 => "field",
+        9 => "constructor",
+        10 => "enum",
+        11 => "interface",
+        12 => "function",
+        13 => "variable",
+        14 => "constant",
+        15 => "string",
+        16 => "number",
+        17 => "boolean",
+        18 => "array",
+        19 => "object",
+        20 => "key",
+        21 => "null",
+        22 => "enum-member",
+        23 => "struct",
+        24 => "event",
+        25 => "operator",
+        26 => "type-parameter",
+        _ => "unknown",
+    }
 }

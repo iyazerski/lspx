@@ -1,12 +1,12 @@
 use std::env;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::cli::{
     Cli, CommandInput, CommandKind, FileArgs, GotoArgs, OutlineArgs, OutputFormat, PositionArgs,
-    WorkspaceSymbolArgs,
+    UsagesArgs, WorkspaceSymbolArgs,
 };
 use crate::daemon::{self, DaemonRequest};
 use crate::model::Output;
@@ -15,11 +15,13 @@ use crate::workspace::resolve_workspace_root;
 pub(crate) fn run(cli: Cli) -> Result<Output> {
     match cli.command {
         CommandKind::Doctor => run_doctor(cli.format, cli.workspace),
-        CommandKind::Goto(args) => run_goto(cli.format, cli.workspace, args),
-        CommandKind::Usages(args) => run_usages(cli.format, cli.workspace, args),
-        CommandKind::FindSymbol(args) => run_find_symbol(cli.format, cli.workspace, args),
+        CommandKind::Goto(args) => run_goto(cli.format, cli.limit, cli.workspace, args),
+        CommandKind::Usages(args) => run_usages(cli.format, cli.limit, cli.workspace, args),
+        CommandKind::FindSymbol(args) => {
+            run_find_symbol(cli.format, cli.limit, cli.workspace, args)
+        }
         CommandKind::Inspect(args) => run_inspect(cli.format, cli.workspace, args),
-        CommandKind::Outline(args) => run_outline(cli.format, cli.workspace, args),
+        CommandKind::Outline(args) => run_outline(cli.format, cli.limit, cli.workspace, args),
         CommandKind::Daemon(args) => daemon::run_daemon_command(cli.format, cli.workspace, args),
     }
 }
@@ -72,6 +74,7 @@ fn run_doctor(format: OutputFormat, workspace_override: Option<PathBuf>) -> Resu
 
 fn run_goto(
     format: OutputFormat,
+    limit: Option<usize>,
     workspace_override: Option<PathBuf>,
     args: GotoArgs,
 ) -> Result<Output> {
@@ -86,6 +89,7 @@ fn run_goto(
             column: input.column,
             target: args.kind,
             format,
+            limit,
         },
         format,
     )
@@ -93,10 +97,11 @@ fn run_goto(
 
 fn run_usages(
     format: OutputFormat,
+    limit: Option<usize>,
     workspace_override: Option<PathBuf>,
-    args: PositionArgs,
+    args: UsagesArgs,
 ) -> Result<Output> {
-    let input = CommandInput::from_position_args(args)?;
+    let input = CommandInput::from_position_args(args.position)?;
     let workspace_root = resolve_workspace_for_file(workspace_override, &input.file)?;
 
     daemon::run_via_daemon(
@@ -105,8 +110,9 @@ fn run_usages(
             file: input.file,
             line: input.line,
             column: input.column,
-            include_declaration: true,
+            include_declaration: !args.no_declaration,
             format,
+            limit,
         },
         format,
     )
@@ -114,6 +120,7 @@ fn run_usages(
 
 fn run_find_symbol(
     format: OutputFormat,
+    limit: Option<usize>,
     workspace_override: Option<PathBuf>,
     args: WorkspaceSymbolArgs,
 ) -> Result<Output> {
@@ -126,6 +133,7 @@ fn run_find_symbol(
             query: args.query,
             kind: args.kind,
             format,
+            limit,
         },
         format,
     )
@@ -136,10 +144,6 @@ fn run_inspect(
     workspace_override: Option<PathBuf>,
     args: PositionArgs,
 ) -> Result<Output> {
-    if !format.is_json() && !format.is_text() {
-        bail!("--format paths and --format count are not supported for inspect");
-    }
-
     let input = CommandInput::from_position_args(args)?;
     let workspace_root = resolve_workspace_for_file(workspace_override, &input.file)?;
 
@@ -157,14 +161,12 @@ fn run_inspect(
 
 fn run_outline(
     format: OutputFormat,
+    limit: Option<usize>,
     workspace_override: Option<PathBuf>,
     args: OutlineArgs,
 ) -> Result<Output> {
-    if format.is_paths() {
-        bail!("--format paths is not supported for outline");
-    }
     if args.full && args.depth.is_some() {
-        bail!("--depth cannot be combined with --full");
+        anyhow::bail!("--depth cannot be combined with --full");
     }
 
     let input = CommandInput::from_file_args(FileArgs { file: args.file })?;
@@ -181,6 +183,7 @@ fn run_outline(
             file: input.file,
             depth,
             format,
+            limit,
         },
         format,
     )

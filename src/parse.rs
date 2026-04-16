@@ -220,6 +220,7 @@ pub(crate) fn parse_workspace_symbols(value: Value) -> Result<Vec<WorkspaceSymbo
             container_name,
             file: file_uri_to_path(uri)?,
             range,
+            snippet: None,
         });
     }
 

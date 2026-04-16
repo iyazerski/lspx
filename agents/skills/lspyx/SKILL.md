@@ -26,5 +26,5 @@ Use `lspyx` for precise Python symbol navigation.
 - If you are targeting a different repo than the current working directory, pass `--workspace /abs/path/to/repo`.
 - Use `--format count` for cardinality questions.
 - Use `--format paths` when file names are enough.
-- Use `outline --depth N` for structure and `outline --full` only when the complete symbol tree matters.
+- Use `--limit N` to cap the number of results returned (does not affect `--format count`).
 - Keep queries narrow: resolve the symbol first, then inspect exact locations.

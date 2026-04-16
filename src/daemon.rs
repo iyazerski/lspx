@@ -84,6 +84,7 @@ pub enum DaemonRequest {
         column: usize,
         target: GotoTarget,
         format: OutputFormat,
+        limit: Option<usize>,
     },
     Usages {
         file: PathBuf,
@@ -91,11 +92,13 @@ pub enum DaemonRequest {
         column: usize,
         include_declaration: bool,
         format: OutputFormat,
+        limit: Option<usize>,
     },
     FindSymbol {
         query: String,
         kind: Option<SymbolKindFilter>,
         format: OutputFormat,
+        limit: Option<usize>,
     },
     Inspect {
         file: PathBuf,
@@ -107,6 +110,7 @@ pub enum DaemonRequest {
         file: PathBuf,
         depth: Option<usize>,
         format: OutputFormat,
+        limit: Option<usize>,
     },
 }
 
@@ -394,6 +398,7 @@ fn dispatch_request(
             column,
             target,
             format,
+            limit,
         } => {
             // Route each goto target through the corresponding LSP request.
             let locations = match target {
@@ -415,13 +420,17 @@ fn dispatch_request(
             };
 
             build_location_response(
-                workspace_root,
-                "goto",
-                file.clone(),
-                line,
-                column,
+                LocationOutput {
+                    ok: true,
+                    command: "goto".to_string(),
+                    workspace_root: workspace_root.to_path_buf(),
+                    file,
+                    line,
+                    column,
+                    locations,
+                },
                 format,
-                locations,
+                limit,
             )?
         }
         DaemonRequest::Usages {
@@ -430,27 +439,46 @@ fn dispatch_request(
             column,
             include_declaration,
             format,
-        } => build_location_response(
-            workspace_root,
-            "usages",
-            file.clone(),
-            line,
-            column,
-            format,
-            adapter.reference_locations(
+            limit,
+        } => {
+            let locations = adapter.reference_locations(
                 workspace_root,
                 &file,
                 line,
                 column,
                 include_declaration,
-            )?,
-        )?,
+            )?;
+            build_location_response(
+                LocationOutput {
+                    ok: true,
+                    command: "usages".to_string(),
+                    workspace_root: workspace_root.to_path_buf(),
+                    file,
+                    line,
+                    column,
+                    locations,
+                },
+                format,
+                limit,
+            )?
+        }
         DaemonRequest::FindSymbol {
             query,
             kind,
             format,
+            limit,
         } => {
             let symbols = adapter.workspace_symbol(&query)?;
+            // Enrich symbols with source snippets for context.
+            let symbols = symbols
+                .into_iter()
+                .map(|mut symbol| {
+                    symbol.snippet = read_line_text(&symbol.file, symbol.range.start.line)
+                        .ok()
+                        .map(|value| value.trim().to_string());
+                    symbol
+                })
+                .collect();
             let payload = WorkspaceSymbolOutput {
                 ok: true,
                 command: "find-symbol".to_string(),
@@ -458,7 +486,9 @@ fn dispatch_request(
                 query,
                 symbols,
             };
-            build_rendered_response(render_workspace_symbol_output(format, &payload, kind)?)?
+            build_rendered_response(render_workspace_symbol_output(
+                format, limit, &payload, kind,
+            )?)?
         }
         DaemonRequest::Inspect {
             file,
@@ -489,6 +519,7 @@ fn dispatch_request(
             file,
             depth,
             format,
+            limit,
         } => {
             let symbols = adapter.document_symbols(&file)?;
             // Preserve the full tree for --full and prune only when a depth limit is requested.
@@ -506,7 +537,7 @@ fn dispatch_request(
                 symbols: hierarchy,
             };
 
-            build_rendered_response(render_outline_output(format, &payload)?)?
+            build_rendered_response(render_outline_output(format, limit, &payload)?)?
         }
     };
 
@@ -514,25 +545,11 @@ fn dispatch_request(
 }
 
 fn build_location_response(
-    workspace_root: &Path,
-    command: &str,
-    file: PathBuf,
-    line: usize,
-    column: usize,
+    payload: LocationOutput,
     format: OutputFormat,
-    locations: Vec<LocationRecord>,
+    limit: Option<usize>,
 ) -> Result<DaemonWireResponse> {
-    let payload = LocationOutput {
-        ok: true,
-        command: command.to_string(),
-        workspace_root: workspace_root.to_path_buf(),
-        file,
-        line,
-        column,
-        locations,
-    };
-
-    build_rendered_response(render_location_output(format, &payload)?)
+    build_rendered_response(render_location_output(format, limit, &payload)?)
 }
 
 fn build_rendered_response(output: Output) -> Result<DaemonWireResponse> {

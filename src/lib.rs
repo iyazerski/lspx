@@ -29,10 +29,12 @@ pub fn cli_main() {
         Err(error) => {
             if error_json {
                 let payload = JsonError {
+                    ok: false,
                     error: error.to_string(),
                 };
-                let serialized = serde_json::to_string(&payload)
-                    .unwrap_or_else(|_| "{\"error\":\"failed to serialize error\"}".to_string());
+                let serialized = serde_json::to_string(&payload).unwrap_or_else(|_| {
+                    "{\"ok\":false,\"error\":\"failed to serialize error\"}".to_string()
+                });
                 eprintln!("{serialized}");
             } else {
                 eprintln!("error: {error}");
@@ -57,5 +59,6 @@ fn print_output(output: &Output) -> Result<()> {
 
 #[derive(Serialize)]
 struct JsonError {
+    ok: bool,
     error: String,
 }

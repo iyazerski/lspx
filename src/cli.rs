@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +22,10 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) format: OutputFormat,
 
+    /// Limit the number of results returned (does not affect --format count).
+    #[arg(long, global = true)]
+    pub(crate) limit: Option<usize>,
+
     #[command(subcommand)]
     pub(crate) command: CommandKind,
 }
@@ -33,7 +37,7 @@ pub(crate) enum CommandKind {
     /// Jump to the definition, declaration, or type of the symbol at a file position.
     Goto(GotoArgs),
     /// Find usages of the symbol at a file position.
-    Usages(PositionArgs),
+    Usages(UsagesArgs),
     /// Search workspace symbols by name.
     FindSymbol(WorkspaceSymbolArgs),
     /// Identify the symbol at a file position and show hover details.
@@ -54,16 +58,19 @@ pub(crate) struct GotoArgs {
 }
 
 #[derive(Args, Debug)]
+pub(crate) struct UsagesArgs {
+    #[command(flatten)]
+    pub(crate) position: PositionArgs,
+    /// Exclude the declaration site from results.
+    #[arg(long)]
+    pub(crate) no_declaration: bool,
+}
+
+#[derive(Args, Debug)]
 pub(crate) struct PositionArgs {
-    /// File that contains the target position.
-    #[arg(value_name = "FILE")]
-    pub(crate) file: PathBuf,
-    /// 1-based line number.
-    #[arg(value_name = "LINE")]
-    pub(crate) line: usize,
-    /// 1-based column number.
-    #[arg(value_name = "COLUMN")]
-    pub(crate) column: usize,
+    /// File position as file:line:column (1-based).
+    #[arg(value_name = "FILE:LINE:COLUMN")]
+    pub(crate) location: String,
 }
 
 #[derive(Args, Debug)]
@@ -105,14 +112,16 @@ pub(crate) struct CommandInput {
 
 impl CommandInput {
     pub(crate) fn from_position_args(args: PositionArgs) -> Result<Self> {
-        if args.line == 0 || args.column == 0 {
+        let (file, line, column) = parse_colon_location(&args.location)?;
+
+        if line == 0 || column == 0 {
             bail!("line and column must be 1-based values");
         }
 
         Ok(Self {
-            file: canonicalize_path(&args.file)?,
-            line: args.line,
-            column: args.column,
+            file: canonicalize_path(&file)?,
+            line,
+            column,
         })
     }
 
@@ -123,6 +132,27 @@ impl CommandInput {
             column: 1,
         })
     }
+}
+
+/// Parse a `file:line:column` string, splitting from the right to preserve colons in paths.
+fn parse_colon_location(input: &str) -> Result<(PathBuf, usize, usize)> {
+    let mut parts = input.rsplitn(3, ':');
+    let column_str = parts.next().unwrap_or("");
+    let line_str = parts.next().unwrap_or("");
+    let file_str = parts.next().unwrap_or("");
+
+    if file_str.is_empty() {
+        bail!("expected FILE:LINE:COLUMN format, got: {input}");
+    }
+
+    let line = line_str
+        .parse::<usize>()
+        .with_context(|| format!("expected FILE:LINE:COLUMN format, got: {input}"))?;
+    let column = column_str
+        .parse::<usize>()
+        .with_context(|| format!("expected FILE:LINE:COLUMN format, got: {input}"))?;
+
+    Ok((PathBuf::from(file_str), line, column))
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize, ValueEnum)]
@@ -137,10 +167,6 @@ pub(crate) enum OutputFormat {
 impl OutputFormat {
     pub(crate) fn is_json(self) -> bool {
         self == Self::Json
-    }
-
-    pub(crate) fn is_text(self) -> bool {
-        self == Self::Text
     }
 
     pub(crate) fn is_paths(self) -> bool {
