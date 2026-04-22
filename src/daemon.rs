@@ -153,7 +153,7 @@ pub fn run_via_daemon(workspace_root: &Path, request: DaemonRequest) -> Result<S
     }
 
     bail!(
-        "daemon not running for workspace {}; run `lspyx daemon ensure --workspace {}` first",
+        "daemon not running for workspace {}; run `lspyx daemon ensure` from that repo or pass `--workspace {}`",
         workspace_root.display(),
         workspace_root.display()
     )

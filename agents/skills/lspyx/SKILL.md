@@ -16,7 +16,7 @@ description: "Use `lspyx` CLI for semantic Python code navigation"
 
 ## Rules
 
-- If you are targeting a different repo than the current working directory, pass `--workspace /abs/path/to/repo`.
+- Omit `--workspace` by default when the current working directory or target file is already in the repo you want.
 - Use `--limit N` to cap the number of results returned.
 - Use `outline --depth N` for structure and `outline --full` only when the complete symbol tree matters.
 - Keep queries narrow: resolve the symbol first, then inspect exact locations.

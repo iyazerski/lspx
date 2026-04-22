@@ -59,7 +59,7 @@ The built-in adapter looks for `ty` in this order:
 
 The workspace root is inferred from the target file or current directory by
 walking upward for `pyproject.toml`, `.git`, `Cargo.toml`, or `package.json`.
-Use `--workspace` to force a specific root.
+Omit `--workspace` by default; use it only to force a different repo root.
 
 ## Daemon mode
 

@@ -23,7 +23,7 @@ const DAEMON_AFTER_HELP: &str =
 #[derive(Parser, Debug)]
 #[command(name = "lspyx", version, about = "Python semantic navigation")]
 pub(crate) struct Cli {
-    /// Override the inferred workspace root when targeting a different repo.
+    /// Optional override for a different repo; omit in the current workspace.
     #[arg(long, global = true)]
     pub(crate) workspace: Option<PathBuf>,
 
