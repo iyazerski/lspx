@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::net::Shutdown;
+use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -152,11 +153,16 @@ pub fn run_via_daemon(workspace_root: &Path, request: DaemonRequest) -> Result<S
         return render_daemon_response(response);
     }
 
-    bail!(
-        "daemon not running for workspace {}; run `lspyx daemon ensure` from that repo or pass `--workspace {}`",
-        workspace_root.display(),
-        workspace_root.display()
-    )
+    ensure_daemon(workspace_root, DEFAULT_IDLE_SECONDS)?;
+
+    let response = send_request(workspace_root, &request)?.ok_or_else(|| {
+        anyhow!(
+            "daemon started for workspace {} but did not accept the request",
+            workspace_root.display()
+        )
+    })?;
+
+    render_daemon_response(response)
 }
 
 pub fn daemon_status(workspace_root: &Path) -> Result<DaemonStatus> {
@@ -177,6 +183,8 @@ pub fn daemon_status(workspace_root: &Path) -> Result<DaemonStatus> {
 }
 
 pub fn ensure_daemon(workspace_root: &Path, idle_seconds: u64) -> Result<DaemonStatus> {
+    // Serialize cold starts so concurrent clients cannot stomp the same socket.
+    let _startup_lock = acquire_startup_lock(workspace_root)?;
     let status = daemon_status(workspace_root)?;
     if status.running {
         return Ok(status);
@@ -184,7 +192,15 @@ pub fn ensure_daemon(workspace_root: &Path, idle_seconds: u64) -> Result<DaemonS
 
     let socket = status.socket_path.clone();
     if socket.exists() {
-        let _ = fs::remove_file(&socket);
+        match fs::remove_file(&socket) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to remove stale socket {}", socket.display())
+                });
+            }
+        }
     }
 
     spawn_daemon_process(workspace_root, idle_seconds)?;
@@ -301,12 +317,21 @@ fn stop_summary(stopped: bool) -> &'static str {
 
 fn serve_daemon(workspace_root: &Path, idle_seconds: u64) -> Result<()> {
     let socket_path = socket_path(workspace_root)?;
-    if socket_path.exists() {
-        let _ = fs::remove_file(&socket_path);
-    }
     if let Some(parent) = socket_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    // Refuse to take over a live socket; the startup lock handles stale cleanup before spawn.
+    if let Some(response) = send_request(workspace_root, &DaemonRequest::Ping)? {
+        let pid = response_pid(&response)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        bail!(
+            "daemon already running for workspace {} (pid {})",
+            workspace_root.display(),
+            pid
+        );
     }
 
     let listener = UnixListener::bind(&socket_path)
@@ -649,19 +674,74 @@ fn debug_log(message: String) {
 }
 
 fn socket_path(workspace_root: &Path) -> Result<PathBuf> {
-    let cache_dir = env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".cache").join("lspyx"))
-        .context("HOME is not set; unable to derive daemon cache directory")?;
+    let cache_dir = daemon_cache_dir()?;
     let workspace_hash = workspace_hash(workspace_root);
 
     Ok(cache_dir.join(format!("{workspace_hash:016x}.sock")))
+}
+
+fn startup_lock_path(workspace_root: &Path) -> Result<PathBuf> {
+    let cache_dir = daemon_cache_dir()?;
+    let workspace_hash = workspace_hash(workspace_root);
+
+    Ok(cache_dir.join(format!("{workspace_hash:016x}.lock")))
+}
+
+fn daemon_cache_dir() -> Result<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".cache").join("lspyx"))
+        .context("HOME is not set; unable to derive daemon cache directory")
+}
+
+fn acquire_startup_lock(workspace_root: &Path) -> Result<DaemonStartupLock> {
+    let lock_path = startup_lock_path(workspace_root)?;
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open daemon lock {}", lock_path.display()))?;
+
+    // Hold an exclusive lock until the daemon is confirmed responsive.
+    let status = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if status != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to lock {}", lock_path.display()));
+    }
+
+    Ok(DaemonStartupLock { file })
 }
 
 fn workspace_hash(workspace_root: &Path) -> u64 {
     let mut hasher = DefaultHasher::new();
     workspace_root.hash(&mut hasher);
     hasher.finish()
+}
+
+fn response_pid(response: &DaemonWireResponse) -> Option<u32> {
+    response
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.get("pid"))
+        .and_then(Value::as_u64)
+        .map(|value| value as u32)
+}
+
+struct DaemonStartupLock {
+    file: fs::File,
+}
+
+impl Drop for DaemonStartupLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
 }
 
 enum DispatchResult {

@@ -18,7 +18,7 @@
 
 - Read-only semantic navigation
 - Predictable text output with workspace-relative paths and explicit counts
-- Persistent daemon mode with explicit startup
+- Persistent daemon mode with automatic startup
 
 ## Installation
 
@@ -43,11 +43,7 @@ Verify the install and inspect command help:
 lspyx --help
 ```
 
-Start the daemon for your workspace before running semantic commands:
-
-```bash
-lspyx daemon ensure
-```
+Run semantic commands directly; `lspyx` starts the workspace daemon on demand.
 
 ## Ty adapter
 
@@ -66,8 +62,8 @@ Omit `--workspace` by default; use it only to force a different repo root.
 `lspyx` uses a persistent background `ty` session per workspace through a
 Unix socket under `~/.cache/lspyx/`.
 
-- Normal semantic commands require a running daemon
-- `lspyx daemon ensure` starts it when needed
+- Normal semantic commands start the daemon when needed
+- `lspyx daemon ensure` still starts it explicitly when you want to prewarm it
 - `lspyx daemon status` reports whether it is running
 - `lspyx daemon stop` asks it to exit cleanly
 

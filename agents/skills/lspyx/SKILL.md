@@ -9,10 +9,9 @@ description: "Use `lspyx` CLI for semantic Python code navigation"
 
 ## Workflow
 
-1. Start the daemon with `lspyx daemon ensure` before running any semantic commands.
-2. If you only know a name, start with `find-symbol <query>`.
-3. Then run the narrow semantic command that answers the question.
-4. Fall back to `rg` only when `lspyx` is unavailable, unsupported, or the task is not semantic navigation.
+1. If you only know a name, start with `find-symbol <query>`.
+2. Then run the narrow semantic command that answers the question.
+3. Fall back to `rg` only when `lspyx` is unavailable, unsupported, or the task is not semantic navigation.
 
 ## Rules
 
